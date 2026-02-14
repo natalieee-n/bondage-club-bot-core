@@ -1,10 +1,13 @@
 import asyncio
-import socketio
 import json
+from copy import deepcopy
+from typing import Any, Dict, Optional
+
+import socketio
 from lzstring import LZString
 
-from utils.socket_event_queue import SocketEventQueue
 from utils.logger import get_logger
+from utils.socket_event_queue import SocketEventQueue
 
 logger = get_logger(__name__)
 
@@ -16,31 +19,66 @@ class BCBot:
         password: str,
         chatroom_settings: dict,
         appearance_code: str = None,
+        server_url: str = "https://bondage-club-server.herokuapp.com/",
+        origin: str = "https://www.bondage-europe.com",
     ):
-        
         logger.info("Initializing bot...")
         self.sio = socketio.AsyncClient()
         self._register_handlers()
 
         self.event_queue = SocketEventQueue(self.sio)
 
-        self.player = {}
-        self.others = {}
-        self.appearance = json.loads(
-            LZString.decompressFromBase64(
-                appearance_code
-            )
-        ) if appearance_code else None
+        self.player: Dict[str, Any] = {}
+        self.others: Dict[int, Dict[str, Any]] = {}
+        self.appearance = self._decode_appearance(appearance_code)
+
         self.is_connected = False
         self.is_logged_in = False
+
         self.username = username
         self.password = password
-        self.chatroom_settings = chatroom_settings
-        self.current_chatroom = None
-        self.chatroom_search_result = None
+        self.server_url = server_url
+        self.origin = origin
+
+        self.chatroom_settings = deepcopy(chatroom_settings)
+        self.current_chatroom: Optional[Dict[str, Any]] = None
+        self.chatroom_search_result: Optional[Dict[str, Any]] = None
+
+        self._target_room_name = (self.chatroom_settings.get("Name") or "").strip()
+        self._login_requested = False
+        self._chatroom_search_requested = False
+        self._chatroom_search_done = False
+        self._chatroom_join_requested = False
+        self._chatroom_join_response = None
+        self._chatroom_create_requested = False
+        self._appearance_reset_done = False
 
         logger.info("Bot initialized")
-    
+
+    def _decode_appearance(self, appearance_code: Optional[str]):
+        if not appearance_code:
+            return None
+        try:
+            raw = LZString.decompressFromBase64(appearance_code)
+            if not raw:
+                logger.warning("Appearance code decompress failed. Skip appearance reset.")
+                return None
+            return json.loads(raw)
+        except Exception as exc:
+            logger.warning("Invalid appearance code. Skip appearance reset: %s", exc)
+            return None
+
+    def _reset_chatroom_flow(self):
+        self.current_chatroom = None
+        self.chatroom_search_result = None
+        self._chatroom_search_requested = False
+        self._chatroom_search_done = False
+        self._chatroom_join_requested = False
+        self._chatroom_join_response = None
+        self._chatroom_create_requested = False
+        self._appearance_reset_done = False
+        self.others.clear()
+
     def _register_handlers(self):
         self.sio.on("connect", self.on_connect)
         self.sio.on("disconnect", self.on_disconnect)
@@ -73,72 +111,94 @@ class BCBot:
         self.sio.on("AccountBeep", self.on_AccountBeep)
         self.sio.on("AccountOwnership", self.on_AccountOwnership)
         self.sio.on("AccountLovership", self.on_AccountLovership)
-        
-        
-        
+
     async def on_ServerInfo(self, data):
-        logger.info("on_ServerInfo received.")
-        logger.info(f"on_ServerInfo data: {data}")
+        logger.info("on_ServerInfo data: %s", data)
 
     async def on_CreationResponse(self, data):
-        logger.info("on_CreationResponse received.")
+        logger.info("on_CreationResponse data: %s", data)
 
     async def on_ForceDisconnect(self, data):
-        logger.info("on_ForceDisconnect received.")
+        logger.warning("on_ForceDisconnect received: %s", data)
+        self.is_logged_in = False
+        self._login_requested = False
+        self._reset_chatroom_flow()
+        if self.sio.connected:
+            await self.sio.disconnect()
 
     async def on_ChatRoomCreateResponse(self, data):
-        logger.info("on_ChatRoomCreateResponse received.")
+        logger.info("on_ChatRoomCreateResponse data: %s", data)
+        if data != "ChatRoomCreated":
+            self._chatroom_create_requested = False
+            if data == "RoomAlreadyExist":
+                self._chatroom_search_requested = False
+                self._chatroom_search_done = False
 
     async def on_ChatRoomUpdateResponse(self, data):
-        logger.info("on_ChatRoomUpdateResponse received.")
+        logger.info("on_ChatRoomUpdateResponse data: %s", data)
 
     async def on_ChatRoomSyncMemberJoin(self, data):
-        logger.info("on_ChatRoomSyncMemberJoin received.")
+        logger.info("on_ChatRoomSyncMemberJoin data: %s", data)
+        character = data.get("Character")
+        if isinstance(character, dict) and "MemberNumber" in character:
+            self.others[character["MemberNumber"]] = character
 
     async def on_ChatRoomSyncRoomProperties(self, data):
-        logger.info("on_ChatRoomSyncRoomProperties received.")
+        logger.info("on_ChatRoomSyncRoomProperties data: %s", data)
+        if self.current_chatroom is None:
+            self.current_chatroom = {}
+        for key, value in data.items():
+            if key != "SourceMemberNumber":
+                self.current_chatroom[key] = value
 
     async def on_ChatRoomSyncReorderPlayers(self, data):
-        logger.info("on_ChatRoomSyncReorderPlayers received.")
+        logger.info("on_ChatRoomSyncReorderPlayers data: %s", data)
+        if self.current_chatroom is None:
+            self.current_chatroom = {}
+        self.current_chatroom["PlayerOrder"] = data.get("PlayerOrder", [])
 
     async def on_ChatRoomSyncExpression(self, data):
-        logger.info("on_ChatRoomSyncExpression received.")
+        logger.info("on_ChatRoomSyncExpression data: %s", data)
 
     async def on_ChatRoomSyncMapData(self, data):
-        logger.info("on_ChatRoomSyncMapData received.")
+        logger.info("on_ChatRoomSyncMapData data: %s", data)
 
     async def on_ChatRoomSyncPose(self, data):
-        logger.info("on_ChatRoomSyncPose received.")
+        logger.info("on_ChatRoomSyncPose data: %s", data)
 
     async def on_ChatRoomSyncArousal(self, data):
-        logger.info("on_ChatRoomSyncArousal received.")
+        logger.info("on_ChatRoomSyncArousal data: %s", data)
 
     async def on_ChatRoomAllowItem(self, data):
-        logger.info("on_ChatRoomAllowItem received.")
+        logger.info("on_ChatRoomAllowItem data: %s", data)
 
     async def on_ChatRoomGameResponse(self, data):
-        logger.info("on_ChatRoomGameResponse received.")
+        logger.info("on_ChatRoomGameResponse data: %s", data)
 
     async def on_PasswordResetResponse(self, data):
-        logger.info("on_PasswordResetResponse received.")
+        logger.info("on_PasswordResetResponse data: %s", data)
 
     async def on_AccountBeep(self, data):
-        logger.info("on_AccountBeep received.")
+        logger.info("on_AccountBeep data: %s", data)
 
     async def on_AccountOwnership(self, data):
-        logger.info("on_AccountOwnership received.")
+        logger.info("on_AccountOwnership data: %s", data)
 
     async def on_AccountLovership(self, data):
-        logger.info("on_AccountLovership received.")
-    
+        logger.info("on_AccountLovership data: %s", data)
+
     async def connect(self):
         try:
-            logger.info("Connecting to server...")
+            if self.sio.connected:
+                self.is_connected = True
+                return True
+
+            logger.info("Connecting to server: %s", self.server_url)
             await self.sio.connect(
-                "https://bondage-club-server.herokuapp.com/",
+                self.server_url,
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:102.0) Gecko/20100101 Firefox/102.0",
-                    "Origin": "https://www.bondage-europe.com",
+                    "Origin": self.origin,
                 },
             )
             return True
@@ -146,12 +206,14 @@ class BCBot:
             if "Already connected" in str(e):
                 logger.info("Already connected to server")
                 self.is_connected = True
-            else:
-                logger.error(e, exc_info=True)
+                return True
+            logger.error("Failed to connect: %s", e, exc_info=True)
             return False
 
     async def disconnect(self):
-        await self.sio.disconnect()
+        await self.event_queue.shutdown()
+        if self.sio.connected:
+            await self.sio.disconnect()
         logger.info("Disconnected from server")
 
     async def on_connect(self):
@@ -159,135 +221,163 @@ class BCBot:
         self.is_connected = True
 
     async def on_disconnect(self):
-        logger.info("Socket disconnected")
+        logger.warning("Socket disconnected")
         self.is_connected = False
         self.is_logged_in = False
-        self.current_chatroom = None
+        self._login_requested = False
+        self._reset_chatroom_flow()
 
     async def on_LoginResponse(self, data):
-        logger.info("on_LoginResponse received.")
-        logger.debug(f"on_LoginResponsedata: {data}")
+        logger.info("on_LoginResponse received")
+        logger.debug("on_LoginResponse data: %s", data)
 
-        self.player = data
-        # self.is_logged_in = True
-    
+        self._login_requested = False
+        if isinstance(data, dict) and "MemberNumber" in data:
+            self.player = data
+            self.is_logged_in = True
+            logger.info("Login successful: %s(%s)", data.get("Name"), data.get("MemberNumber"))
+            return
+
+        self.player = {}
+        self.is_logged_in = False
+        logger.warning("Login failed: %s", data)
+
     async def on_ChatRoomSearchResponse(self, data):
-        logger.info(f"on_ChatRoomSearchResponse data: {data}")
+        logger.info("on_ChatRoomSearchResponse data: %s", data)
+        self._chatroom_join_response = data
+        if data != "JoinedRoom":
+            self._chatroom_join_requested = False
+            self._chatroom_search_requested = False
+            self._chatroom_search_done = False
 
     async def on_AccountQueryResult(self, data):
-        logger.info(f"on_AccountQueryResult data: {data}")
+        logger.info("on_AccountQueryResult data: %s", data)
 
     async def on_ChatRoomMessage(self, data):
-        logger.info(f"on_ChatRoomMessage data received. Type: {data['Type']}, Player: {data['Sender']}, Content: {data['Content']}")
+        logger.info(
+            "on_ChatRoomMessage data received. Type: %s, Player: %s, Content: %s",
+            data.get("Type"),
+            data.get("Sender"),
+            data.get("Content"),
+        )
 
         await self.customized_event_handler(data)
 
     async def on_ChatRoomSync(self, data):
-        logger.info(f"on_ChatRoomSync data received.")
-        logger.debug(f"on_ChatRoomSync data: {data}")
-        self.current_chatroom = {
-            k: v for k, v in data.items() if k not in ["Character", "Space"]
-        }
-        logger.info(f"Entered room {data['Name']}, {len(data['Character'])} members in total")
+        logger.info("on_ChatRoomSync data received")
+        logger.debug("on_ChatRoomSync data: %s", data)
+
+        self.current_chatroom = {k: v for k, v in data.items() if k != "Character"}
+        self._chatroom_join_response = "JoinedRoom"
+
+        chars = data.get("Character", [])
+        member_count = len(chars) if isinstance(chars, list) else 1
+        logger.info("Entered room %s, %s members in total", data.get("Name"), member_count)
 
         await self.on_ChatRoomSyncCharacter(data)
 
     async def on_ChatRoomSyncItem(self, data):
-        logger.info(f"on_ChatRoomSyncItem data received.")
-        logger.debug(f"on_ChatRoomSyncItem data: {data}")
+        logger.info("on_ChatRoomSyncItem data received")
+        logger.debug("on_ChatRoomSyncItem data: %s", data)
 
-        item = data["Item"]
-        if not self.others.get(item["Target"]):
-            logger.warning(
-                f"try to update an item on character {item['Target']} but the data is not in database"
-            )
+        item = data.get("Item", {})
+        target = item.get("Target")
+
+        if not isinstance(target, int):
+            logger.warning("Invalid ChatRoomSyncItem target: %s", target)
             return
-        # update character data
-        appearance = self.others[item["Target"]]["Appearance"]
-        for i in range(len(appearance)):
-            if appearance[i]["Group"] == item["Group"]:
-                if item.get("Name"):  # change an item
-                    appearance[i] = item
-                else:  # remove an item
-                    appearance = appearance[:i] + appearance[i + 1 :]
+
+        target_data = self.others.get(target)
+        if not target_data:
+            logger.warning("Item update target %s not in local room cache", target)
+            return
+
+        appearance = target_data.setdefault("Appearance", [])
+        for idx, cur_item in enumerate(appearance):
+            if cur_item.get("Group") == item.get("Group"):
+                if item.get("Name"):
+                    appearance[idx] = item
+                else:
+                    del appearance[idx]
                 return
-        appearance.append(item)  # add a new item
+
+        if item.get("Name"):
+            appearance.append(item)
 
     async def on_ChatRoomSyncMemberLeave(self, data):
-        logger.info(f"on_ChatRoomSyncMemberLeave data: {data}")
+        logger.info("on_ChatRoomSyncMemberLeave data: %s", data)
 
-        self.others.pop(data["SourceMemberNumber"], None)
-        logger.info(f'Player left: {data["SourceMemberNumber"]}')
+        member_number = data.get("SourceMemberNumber")
+        self.others.pop(member_number, None)
+        logger.info("Player left: %s", member_number)
+
+        if member_number == self.player.get("MemberNumber"):
+            self._reset_chatroom_flow()
 
     async def on_ChatRoomSearchResult(self, data):
-        logger.info(f"on_ChatRoomSearchResult data received.")
-        logger.debug(f"on_ChatRoomSearchResult data: {data}")
+        logger.info("on_ChatRoomSearchResult data received")
+        logger.debug("on_ChatRoomSearchResult data: %s", data)
 
-        self.chatroom_search_result = data
+        self._chatroom_search_done = True
+        self.chatroom_search_result = None
+
+        if not isinstance(data, list):
+            logger.warning("Unexpected chatroom search result type: %s", type(data))
+            return
+
+        target_name = self._target_room_name.upper()
+        for room in data:
+            if not isinstance(room, dict):
+                continue
+            if (room.get("Name") or "").upper() == target_name:
+                self.chatroom_search_result = room
+                break
+
+        if self.chatroom_search_result:
+            logger.info("Target room exists: %s", self.chatroom_search_result.get("Name"))
+        else:
+            logger.info("Target room not found: %s", self._target_room_name)
 
     async def on_ChatRoomSyncCharacter(self, data):
-        logger.info(f"on_ChatRoomSyncCharacter data received.")
-        logger.debug(f"on_ChatRoomSyncCharacter data: {data}")
+        logger.info("on_ChatRoomSyncCharacter data received")
+        logger.debug("on_ChatRoomSyncCharacter data: %s", data)
 
-        Characters = (
-            data["Character"]
-            if isinstance(data["Character"], list)
-            else [data["Character"]]
-        )
-        for i in Characters:
-            logger.info(f"Update {i['Name']}({i['MemberNumber']})'s data")
-            self.others[i["MemberNumber"]] = i
+        characters = data.get("Character")
+        if characters is None:
+            return
+        if not isinstance(characters, list):
+            characters = [characters]
 
-            # # update ownership
-            # owner = i.get("Ownership", {})
-            # owner = owner.get("MemberNumber", 0) if owner else 0
-            # if (
-            #     owner != 0
-            #     and owner == self.player["MemberNumber"]
-            #     and i["MemberNumber"] not in self.player["SubmissivesList"]
-            # ):
-            #     await self.add_or_remove_submissive(i["MemberNumber"])
-            # # add gameversion check
-            # gameversion = i.get("OnlineSharedSettings", {}).get("GameVersion")
-            # if gameversion:
-            #     gv = int(gameversion[1:])
-            #     mygv = int(
-            #         self.player.get("OnlineSharedSettings", {}).get(
-            #             "GameVersion", "R0"
-            #         )[1:]
-            #     )
-            #     if gv > mygv:
-            #         self.player["OnlineSharedSettings"]["GameVersion"] = "R{}".format(
-            #             gv
-            #         )
-            #         await self.event_queue.put_event(
-            #             "AccountUpdate",
-            #             {"OnlineSharedSettings": self.player["OnlineSharedSettings"]}
-            #         )
+        for char_data in characters:
+            if not isinstance(char_data, dict) or "MemberNumber" not in char_data:
+                continue
+            logger.info("Update %s(%s)'s data", char_data.get("Name"), char_data.get("MemberNumber"))
+            self.others[char_data["MemberNumber"]] = char_data
 
     async def on_ChatRoomSyncSingle(self, data):
-        logger.info(f"on_ChatRoomSyncSingle data received.")
-        logger.debug(f"on_ChatRoomSyncSingle data: {data}")
-
+        logger.info("on_ChatRoomSyncSingle data received")
+        logger.debug("on_ChatRoomSyncSingle data: %s", data)
         await self.on_ChatRoomSyncCharacter(data)
 
     async def on_LoginQueue(self, data):
-        logger.info(f"on_LoginQueue data: {data}")
-        await asyncio.sleep(30)
-
+        logger.info("on_LoginQueue data: %s", data)
 
     async def login(self):
-        logger.info(f"Logging in using AccountName {self.username}.")
+        if not self.username or not self.password:
+            raise ValueError("BC username/password is empty")
+
+        logger.info("Logging in using AccountName %s", self.username)
         await self.sio.emit(
-            "AccountLogin", 
+            "AccountLogin",
             {
-                "AccountName": self.username, 
-                "Password": self.password
-            }
+                "AccountName": self.username,
+                "Password": self.password,
+            },
         )
+        self._login_requested = True
 
     async def search_chatroom(self, name, **kwargs):
-        logger.info(f"Searching for chatroom {name}.")
+        logger.info("Searching for chatroom %s", name)
         data = {
             "Query": name.upper(),
             "Language": "",
@@ -297,72 +387,107 @@ class BCBot:
             "ShowLocked": True,
         }
         data.update(kwargs)
+
+        self.chatroom_search_result = None
+        self._chatroom_search_done = False
+        self._chatroom_search_requested = True
+
         await self.event_queue.put_event("ChatRoomSearch", data)
 
     async def create_chatroom(self, chatroom_settings: dict):
-        data = chatroom_settings
-        data["Admin"].append(self.player["MemberNumber"])
-        logger.info(f'Creating chatroom {data["Name"]}.')
-        logger.debug(f"Chatroom data: {data}")
+        data = deepcopy(chatroom_settings)
+        admin_list = data.get("Admin")
+        if not isinstance(admin_list, list):
+            admin_list = []
+            data["Admin"] = admin_list
+
+        member_number = self.player.get("MemberNumber")
+        if isinstance(member_number, int) and member_number not in admin_list:
+            admin_list.append(member_number)
+
+        logger.info("Creating chatroom %s", data.get("Name"))
+        logger.debug("Chatroom data: %s", data)
+
+        self._chatroom_create_requested = True
         await self.event_queue.put_event("ChatRoomCreate", data)
-    
+
     async def join_chatroom(self, name):
         data = {"Name": name}
-        logger.info(f"Joining chatroom {name}.")
+        logger.info("Joining chatroom %s", name)
+
+        self._chatroom_join_requested = True
+        self._chatroom_join_response = None
         await self.event_queue.put_event("ChatRoomJoin", data)
 
     async def reset_appearance(self):
-        logger.info("Resetting appearance...")
+        logger.info("Resetting appearance")
         if not self.appearance:
-            logger.warning("No appearance data found. Skipping...")
+            logger.warning("No appearance data found. Skip reset.")
+            self._appearance_reset_done = True
             return
+
         data = {
             "AssetFamily": "Female3DCG",
             "Appearance": self.appearance,
             "ItemPermission": 1,
         }
         await self.event_queue.put_event("AccountUpdate", data)
-    
+        self._appearance_reset_done = True
+
     async def send_to_chat(self, msg):
-        logger.info(f"Sending message: {msg}")
+        logger.info("Sending message: %s", msg)
         data = {"Content": msg, "Type": "Chat", "Target": None}
         await self.event_queue.put_event("ChatRoomChat", data)
 
     async def customized_event_handler(self, data):
         logger.warning("No customized event handler found.")
-        pass
 
     async def run(self):
         try:
-            logger.info("Starting event queue...")
+            logger.info("Starting event queue")
             await self.event_queue.start()
 
             while True:
                 if not self.is_connected:
                     await self.connect()
-                elif not self.is_logged_in:
-                    await self.login()
-                elif not self.current_chatroom:
-                    await self.search_chatroom(self.chatroom_settings["Name"])
-                    while self.chatroom_search_result == None:
-                        await asyncio.sleep(0.5)
+                    await asyncio.sleep(2)
+                    continue
+
+                if not self.is_logged_in:
+                    if not self._login_requested:
+                        await self.login()
+                    await asyncio.sleep(2)
+                    continue
+
+                if not self.current_chatroom:
+                    if not self._chatroom_search_requested and not self._chatroom_search_done:
+                        await self.search_chatroom(self._target_room_name)
+                        await asyncio.sleep(1)
+                        continue
+
+                    if not self._chatroom_search_done:
+                        await asyncio.sleep(1)
+                        continue
+
                     if self.chatroom_search_result:
-                        await self.join_chatroom(self.chatroom_settings["Name"])
+                        if not self._chatroom_join_requested and self._chatroom_join_response is None:
+                            await self.join_chatroom(self._target_room_name)
                     else:
-                        await self.create_chatroom(self.chatroom_settings)
-                    await asyncio.sleep(1)
+                        if not self._chatroom_create_requested:
+                            await self.create_chatroom(self.chatroom_settings)
+
+                    await asyncio.sleep(2)
+                    continue
+
+                if not self._appearance_reset_done:
                     await self.reset_appearance()
-                else:
-                    logger.info(
-                        "Idling..."
-                    )
-                    await self.sio.wait()
+
+                logger.info("Idling...")
                 await asyncio.sleep(5)
 
         except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("Shutting down with Ctrl+C...")
         except Exception as e:
-            logger.error(e)
-        
+            logger.error("Bot runtime error: %s", e, exc_info=True)
         finally:
             await self.disconnect()
