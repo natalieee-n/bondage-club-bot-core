@@ -1,9 +1,12 @@
 import asyncio
 import json
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from bondage_club_bot_core import BCBot
+
+BASE_DIR = Path(__file__).resolve().parent
 
 load_dotenv()
 
@@ -13,7 +16,7 @@ class BasicBot(BCBot):
         return
 
 
-with open("chatroom_config.json", "r") as f:
+with open(BASE_DIR / "chatroom_config.json", "r") as f:
     chatroom_config = json.load(f)
 
 

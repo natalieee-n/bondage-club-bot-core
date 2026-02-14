@@ -28,4 +28,9 @@ class MyBot(BCBot):
 
 ## Local run example
 
-`main.py` includes a minimal runnable subclass (`BasicBot`) that only uses core features.
+Example runtime files are under `examples/basic_bot/`.
+
+- Script: `examples/basic_bot/main.py`
+- Config template: `examples/basic_bot/.env.example`
+- Chatroom config: `examples/basic_bot/chatroom_config.json`
+- Docker files: `examples/basic_bot/Dockerfile`, `examples/basic_bot/docker-compose.yml`

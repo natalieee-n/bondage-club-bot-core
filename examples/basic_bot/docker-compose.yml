@@ -1,0 +1,13 @@
+services:
+  bot:
+    build:
+      context: ../..
+      dockerfile: examples/basic_bot/Dockerfile
+    container_name: bc-bot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - ../..:/app
+    working_dir: /app
+    command: python examples/basic_bot/main.py
