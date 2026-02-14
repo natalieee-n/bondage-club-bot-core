@@ -6,8 +6,8 @@ from typing import Any, Dict, Optional
 import socketio
 from lzstring import LZString
 
-from utils.logger import get_logger
-from utils.socket_event_queue import SocketEventQueue
+from .utils.logger import get_logger
+from .utils.socket_event_queue import SocketEventQueue
 
 logger = get_logger(__name__)
 

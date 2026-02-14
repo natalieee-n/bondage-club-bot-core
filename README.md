@@ -1,39 +1,36 @@
-# bc-bot
-Bondage Club Bot using socket.io.
+# bondage-club-bot-core
 
-## About this project
-This project is based on [BC-BotNyan](https://github.com/miyu-notM/BC-BotNyan), originally created by [@miyu-notM](https://github.com/miyu-notM).
+Core Bondage Club bot library (socket.io client + chatroom lifecycle management).
 
-## Installation
+## Scope
 
-1. Edit configs
+This repository now only contains core bot features:
+- Socket connection and login
+- Chatroom search/create/join flow
+- Room/member state synchronization
+- Event queue and base extension hook (`customized_event_handler`)
 
-```bash
-vim .env # based on .env.example
-vim chatroom_config.json
-```
-
-Choose either of the following ways to install.
-
-2.a Instaling using Docker
+## Install
 
 ```bash
-docker compose up --build
+pip install .
 ```
 
-2.b Installing directly
+## Use as a library
 
-```bash
-pip install -r requirements.txt
-python main.py
+```python
+from bondage_club_bot_core import BCBot
+
+class MyBot(BCBot):
+    async def customized_event_handler(self, data):
+        pass
 ```
 
-## Useful Links
+## Local run example
 
-- Server socketio event definition: [Ben987/Bondage-Club-Server](https://github.com/Ben987/Bondage-Club-Server)
-- Client socketio event definition: [BondageProjects/Bondage-College](https://gitgud.io/BondageProjects/Bondage-College/-/blob/master/BondageClub/Scripts/Server.js)
+Example runtime files are under `examples/basic_bot/`.
 
-## License
-
-The original project is licensed under the MIT license.  
-All original rights and credits belong to the original author.
+- Script: `examples/basic_bot/main.py`
+- Config template: `examples/basic_bot/.env.example`
+- Chatroom config: `examples/basic_bot/chatroom_config.json`
+- Docker files: `examples/basic_bot/Dockerfile`, `examples/basic_bot/docker-compose.yml`

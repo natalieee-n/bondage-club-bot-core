@@ -9,10 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY requirements.txt .
-
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
 
-CMD ["python", "main.py"]
+RUN pip install --no-cache-dir . \
+    && pip install --no-cache-dir -r examples/basic_bot/requirements.txt
+
+CMD ["python", "examples/basic_bot/main.py"]
