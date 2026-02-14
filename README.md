@@ -10,9 +10,6 @@ This repository now only contains core bot features:
 - Room/member state synchronization
 - Event queue and base extension hook (`customized_event_handler`)
 
-Prison timer features were moved out to:
-- `bondage-club-bot-prison-timer`
-
 ## Install
 
 ```bash
