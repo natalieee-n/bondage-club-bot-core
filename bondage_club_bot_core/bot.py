@@ -595,27 +595,8 @@ class BCBot:
                     await asyncio.sleep(2)
                     continue
 
-                if not self.current_chatroom:
-                    if not self._chatroom_search_requested and not self._chatroom_search_done:
-                        await self.search_chatroom(self._target_room_name)
-                        await asyncio.sleep(1)
-                        continue
-
-                    if not self._chatroom_search_done:
-                        await asyncio.sleep(1)
-                        continue
-
-                    if self.chatroom_search_result:
-                        if not self._chatroom_join_requested and self._chatroom_join_response is None:
-                            await self.join_chatroom(self._target_room_name)
-                    else:
-                        if not self._chatroom_create_requested:
-                            await self.create_chatroom(self.chatroom_settings)
-
-                    await asyncio.sleep(2)
-                    continue
-
-                if not self._appearance_reset_done:
+                # Manual mode: room search/create/join is triggered by explicit API calls.
+                if not self._appearance_reset_done and self.appearance:
                     await self.reset_appearance()
 
                 await asyncio.sleep(5)
