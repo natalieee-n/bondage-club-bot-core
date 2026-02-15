@@ -527,7 +527,10 @@ class BCBot:
         return self._chatroom_join_response
 
     async def leave_chatroom(self):
-        await self.event_queue.put_event("ChatRoomLeave", {})
+        # Server does not send a leave ack back to the leaving socket.
+        # Sync local room state immediately after queuing leave.
+        await self.event_queue.put_event("ChatRoomLeave", "")
+        self._reset_chatroom_flow()
 
     async def query_account(self, query: str, timeout: float = 10.0):
         self.last_account_query_results.pop(query, None)
