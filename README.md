@@ -9,6 +9,7 @@ This repository now only contains core bot features:
 - Chatroom search/create/join flow
 - Room/member state synchronization
 - Event queue and base extension hook (`customized_event_handler`)
+- Query helpers for account/room data and message history
 
 ## Install
 
