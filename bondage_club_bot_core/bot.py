@@ -288,7 +288,6 @@ class BCBot:
             data.get("Content"),
         )
         try:
-            assert False
             await self.customized_event_handler(data)
         except Exception:
             logger.error("customized_event_handler failed", exc_info=True)
