@@ -482,7 +482,6 @@ class BCBot:
                 if not self._appearance_reset_done:
                     await self.reset_appearance()
 
-                logger.info("Idling...")
                 await asyncio.sleep(5)
 
         except (KeyboardInterrupt, asyncio.CancelledError):
