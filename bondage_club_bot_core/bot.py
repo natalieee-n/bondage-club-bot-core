@@ -22,7 +22,6 @@ class BCBot:
         self,
         username: str,
         password: str,
-        chatroom_settings: dict,
         appearance_code: str = None,
         server_url: str = "https://bondage-club-server.herokuapp.com/",
         origin: str = "https://www.bondage-europe.com",
@@ -45,14 +44,13 @@ class BCBot:
         self.server_url = server_url
         self.origin = origin
 
-        self.chatroom_settings = deepcopy(chatroom_settings)
         self.current_chatroom: Optional[Dict[str, Any]] = None
         self.chatroom_search_result: Optional[Dict[str, Any]] = None
         self.chatroom_search_results: List[Dict[str, Any]] = []
         self.last_account_query_results: Dict[str, Any] = {}
         self.chat_history: deque[Dict[str, Any]] = deque(maxlen=500)
 
-        self._target_room_name = (self.chatroom_settings.get("Name") or "").strip()
+        self._active_search_query = ""
         self._login_requested = False
         self._chatroom_search_requested = False
         self._chatroom_search_done = False
@@ -81,6 +79,7 @@ class BCBot:
         self.current_chatroom = None
         self.chatroom_search_result = None
         self.chatroom_search_results = []
+        self._active_search_query = ""
         self._chatroom_search_requested = False
         self._chatroom_search_done = False
         self._chatroom_join_requested = False
@@ -372,16 +371,17 @@ class BCBot:
             return
 
         self.chatroom_search_results = [room for room in data if isinstance(room, dict)]
-        target_name = self._target_room_name.upper()
-        for room in self.chatroom_search_results:
-            if (room.get("Name") or "").upper() == target_name:
-                self.chatroom_search_result = room
-                break
+        matcher = self._active_search_query.upper()
+        if matcher:
+            for room in self.chatroom_search_results:
+                if (room.get("Name") or "").upper() == matcher:
+                    self.chatroom_search_result = room
+                    break
 
         if self.chatroom_search_result:
-            logger.info("Target room exists: %s", self.chatroom_search_result.get("Name"))
+            logger.info("Matched room exists: %s", self.chatroom_search_result.get("Name"))
         else:
-            logger.info("Target room not found: %s", self._target_room_name)
+            logger.info("Searched room not found: %s", self._active_search_query)
 
     async def on_ChatRoomSyncCharacter(self, data):
         logger.info("on_ChatRoomSyncCharacter data received")
@@ -449,8 +449,9 @@ class BCBot:
 
     async def search_chatroom(self, name, **kwargs):
         logger.info("Searching for chatroom %s", name)
+        normalized_name = (name or "").strip()
         data = {
-            "Query": name.upper(),
+            "Query": normalized_name.upper(),
             "Language": "",
             "Space": "",
             "Game": "",
@@ -460,6 +461,7 @@ class BCBot:
         data.update(kwargs)
 
         self.chatroom_search_result = None
+        self._active_search_query = normalized_name
         self._chatroom_search_done = False
         self._chatroom_search_requested = True
 
