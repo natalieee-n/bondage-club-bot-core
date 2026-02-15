@@ -1,5 +1,8 @@
 import asyncio
 import json
+import os
+import traceback
+import urllib.request
 from copy import deepcopy
 from typing import Any, Dict, Optional
 
@@ -253,6 +256,30 @@ class BCBot:
     async def on_AccountQueryResult(self, data):
         logger.info("on_AccountQueryResult data: %s", data)
 
+    def _send_error_to_ntfy(self, error_text: str) -> None:
+        ntfy_topic = os.getenv("NTFY_TOPIC", "").strip()
+        if not ntfy_topic:
+            return
+
+        ntfy_server = os.getenv("NTFY_SERVER", "https://ntfy.sh").strip().rstrip("/")
+        message = f"BCBot error\n\n{error_text[-3000:]}"
+        request = urllib.request.Request(
+            f"{ntfy_server}/{ntfy_topic}",
+            data=message.encode("utf-8"),
+            headers={
+                "Title": "BCBot Error",
+                "Priority": "urgent",
+                "Tags": "warning,robot_face",
+                "Content-Type": "text/plain; charset=utf-8",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=5):
+                pass
+        except Exception:
+            logger.exception("Failed to send error to ntfy")
+
     async def on_ChatRoomMessage(self, data):
         logger.info(
             "on_ChatRoomMessage data received. Type: %s, Player: %s, Content: %s",
@@ -260,8 +287,11 @@ class BCBot:
             data.get("Sender"),
             data.get("Content"),
         )
-
-        await self.customized_event_handler(data)
+        try:
+            await self.customized_event_handler(data)
+        except Exception:
+            logger.error("customized_event_handler failed", exc_info=True)
+            self._send_error_to_ntfy(traceback.format_exc())
 
     async def on_ChatRoomSync(self, data):
         logger.info("on_ChatRoomSync data received")
@@ -482,12 +512,12 @@ class BCBot:
                 if not self._appearance_reset_done:
                     await self.reset_appearance()
 
-                logger.info("Idling...")
                 await asyncio.sleep(5)
 
         except (KeyboardInterrupt, asyncio.CancelledError):
             logger.info("Shutting down with Ctrl+C...")
         except Exception as e:
             logger.error("Bot runtime error: %s", e, exc_info=True)
+            self._send_error_to_ntfy(traceback.format_exc())
         finally:
             await self.disconnect()

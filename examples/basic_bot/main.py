@@ -8,7 +8,7 @@ from bondage_club_bot_core import BCBot
 
 BASE_DIR = Path(__file__).resolve().parent
 
-load_dotenv()
+load_dotenv(BASE_DIR / ".env")
 
 
 class BasicBot(BCBot):
