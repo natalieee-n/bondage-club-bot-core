@@ -24,7 +24,6 @@ bot_test = BasicBot(
     username=os.getenv("BC_USERNAME", ""),
     password=os.getenv("BC_PASSWORD", ""),
     chatroom_settings=chatroom_config,
-    appearance_code=os.getenv("APPEARANCE_CODE", ""),
 )
 
 asyncio.run(bot_test.run())

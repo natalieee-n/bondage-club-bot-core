@@ -1,5 +1,6 @@
 import asyncio
 import socketio
+from typing import Any
 
 from .logger import get_logger
 
@@ -32,7 +33,7 @@ class SocketEventQueue:
                 logger.info("EventQueue has been shutdown")
             self._sender_task = None
 
-    async def put_event(self, event_name: str, data: dict):
+    async def put_event(self, event_name: str, data: Any):
         """Add an event to the queue"""
         await self.event_queue.put((event_name, data))
 

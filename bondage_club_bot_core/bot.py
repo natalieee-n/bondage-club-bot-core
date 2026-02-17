@@ -3,8 +3,10 @@ import json
 import os
 import traceback
 import urllib.request
+from collections import deque
 from copy import deepcopy
-from typing import Any, Dict, Optional
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 import socketio
 from lzstring import LZString
@@ -20,8 +22,6 @@ class BCBot:
         self,
         username: str,
         password: str,
-        chatroom_settings: dict,
-        appearance_code: str = None,
         server_url: str = "https://bondage-club-server.herokuapp.com/",
         origin: str = "https://www.bondage-europe.com",
     ):
@@ -33,7 +33,7 @@ class BCBot:
 
         self.player: Dict[str, Any] = {}
         self.others: Dict[int, Dict[str, Any]] = {}
-        self.appearance = self._decode_appearance(appearance_code)
+        self.appearance = None
 
         self.is_connected = False
         self.is_logged_in = False
@@ -43,17 +43,20 @@ class BCBot:
         self.server_url = server_url
         self.origin = origin
 
-        self.chatroom_settings = deepcopy(chatroom_settings)
         self.current_chatroom: Optional[Dict[str, Any]] = None
         self.chatroom_search_result: Optional[Dict[str, Any]] = None
+        self.chatroom_search_results: List[Dict[str, Any]] = []
+        self.last_account_query_results: Dict[str, Any] = {}
+        self.chat_history: deque[Dict[str, Any]] = deque(maxlen=500)
 
-        self._target_room_name = (self.chatroom_settings.get("Name") or "").strip()
+        self._active_search_query = ""
         self._login_requested = False
         self._chatroom_search_requested = False
         self._chatroom_search_done = False
         self._chatroom_join_requested = False
         self._chatroom_join_response = None
         self._chatroom_create_requested = False
+        self._chatroom_create_response = None
         self._appearance_reset_done = False
 
         logger.info("Bot initialized")
@@ -74,11 +77,14 @@ class BCBot:
     def _reset_chatroom_flow(self):
         self.current_chatroom = None
         self.chatroom_search_result = None
+        self.chatroom_search_results = []
+        self._active_search_query = ""
         self._chatroom_search_requested = False
         self._chatroom_search_done = False
         self._chatroom_join_requested = False
         self._chatroom_join_response = None
         self._chatroom_create_requested = False
+        self._chatroom_create_response = None
         self._appearance_reset_done = False
         self.others.clear()
 
@@ -131,6 +137,7 @@ class BCBot:
 
     async def on_ChatRoomCreateResponse(self, data):
         logger.info("on_ChatRoomCreateResponse data: %s", data)
+        self._chatroom_create_response = data
         if data != "ChatRoomCreated":
             self._chatroom_create_requested = False
             if data == "RoomAlreadyExist":
@@ -255,6 +262,8 @@ class BCBot:
 
     async def on_AccountQueryResult(self, data):
         logger.info("on_AccountQueryResult data: %s", data)
+        if isinstance(data, dict) and isinstance(data.get("Query"), str):
+            self.last_account_query_results[data["Query"]] = data.get("Result")
 
     def _send_error_to_ntfy(self, error_text: str) -> None:
         ntfy_topic = os.getenv("NTFY_TOPIC", "").strip()
@@ -287,6 +296,10 @@ class BCBot:
             data.get("Sender"),
             data.get("Content"),
         )
+        if isinstance(data, dict):
+            message = dict(data)
+            message["ReceivedAt"] = datetime.now(timezone.utc).isoformat()
+            self.chat_history.append(message)
         try:
             await self.customized_event_handler(data)
         except Exception:
@@ -350,23 +363,24 @@ class BCBot:
 
         self._chatroom_search_done = True
         self.chatroom_search_result = None
+        self.chatroom_search_results = []
 
         if not isinstance(data, list):
             logger.warning("Unexpected chatroom search result type: %s", type(data))
             return
 
-        target_name = self._target_room_name.upper()
-        for room in data:
-            if not isinstance(room, dict):
-                continue
-            if (room.get("Name") or "").upper() == target_name:
-                self.chatroom_search_result = room
-                break
+        self.chatroom_search_results = [room for room in data if isinstance(room, dict)]
+        matcher = self._active_search_query.upper()
+        if matcher:
+            for room in self.chatroom_search_results:
+                if (room.get("Name") or "").upper() == matcher:
+                    self.chatroom_search_result = room
+                    break
 
         if self.chatroom_search_result:
-            logger.info("Target room exists: %s", self.chatroom_search_result.get("Name"))
+            logger.info("Matched room exists: %s", self.chatroom_search_result.get("Name"))
         else:
-            logger.info("Target room not found: %s", self._target_room_name)
+            logger.info("Searched room not found: %s", self._active_search_query)
 
     async def on_ChatRoomSyncCharacter(self, data):
         logger.info("on_ChatRoomSyncCharacter data received")
@@ -406,10 +420,37 @@ class BCBot:
         )
         self._login_requested = True
 
+    async def wait_for_login(self, timeout: float = 15.0, interval: float = 0.2) -> bool:
+        elapsed = 0.0
+        while elapsed < timeout:
+            if self.is_logged_in:
+                return True
+            await asyncio.sleep(interval)
+            elapsed += interval
+        return self.is_logged_in
+
+    async def ensure_logged_in(self, timeout: float = 15.0) -> bool:
+        if not self.is_connected:
+            connected = await self.connect()
+            if not connected:
+                return False
+            await asyncio.sleep(0.5)
+
+        if self.is_logged_in:
+            return True
+
+        if not self._login_requested:
+            try:
+                await self.login()
+            except ValueError:
+                return False
+        return await self.wait_for_login(timeout=timeout)
+
     async def search_chatroom(self, name, **kwargs):
         logger.info("Searching for chatroom %s", name)
+        normalized_name = (name or "").strip()
         data = {
-            "Query": name.upper(),
+            "Query": normalized_name.upper(),
             "Language": "",
             "Space": "",
             "Game": "",
@@ -419,10 +460,22 @@ class BCBot:
         data.update(kwargs)
 
         self.chatroom_search_result = None
+        self._active_search_query = normalized_name
         self._chatroom_search_done = False
         self._chatroom_search_requested = True
 
         await self.event_queue.put_event("ChatRoomSearch", data)
+
+    async def search_chatrooms(self, query: str = "", timeout: float = 10.0, **kwargs):
+        await self.search_chatroom(query, **kwargs)
+        elapsed = 0.0
+        interval = 0.2
+        while elapsed < timeout:
+            if self._chatroom_search_done:
+                return self.chatroom_search_results
+            await asyncio.sleep(interval)
+            elapsed += interval
+        return self.chatroom_search_results
 
     async def create_chatroom(self, chatroom_settings: dict):
         data = deepcopy(chatroom_settings)
@@ -439,7 +492,19 @@ class BCBot:
         logger.debug("Chatroom data: %s", data)
 
         self._chatroom_create_requested = True
+        self._chatroom_create_response = None
         await self.event_queue.put_event("ChatRoomCreate", data)
+
+    async def create_chatroom_and_wait(self, chatroom_settings: dict, timeout: float = 10.0):
+        await self.create_chatroom(chatroom_settings)
+        elapsed = 0.0
+        interval = 0.2
+        while elapsed < timeout:
+            if self._chatroom_create_response is not None:
+                return self._chatroom_create_response
+            await asyncio.sleep(interval)
+            elapsed += interval
+        return self._chatroom_create_response
 
     async def join_chatroom(self, name):
         data = {"Name": name}
@@ -448,6 +513,51 @@ class BCBot:
         self._chatroom_join_requested = True
         self._chatroom_join_response = None
         await self.event_queue.put_event("ChatRoomJoin", data)
+
+    async def join_chatroom_and_wait(self, name: str, timeout: float = 10.0):
+        await self.join_chatroom(name)
+        elapsed = 0.0
+        interval = 0.2
+        while elapsed < timeout:
+            if self._chatroom_join_response is not None:
+                return self._chatroom_join_response
+            await asyncio.sleep(interval)
+            elapsed += interval
+        return self._chatroom_join_response
+
+    async def leave_chatroom(self):
+        # Server does not send a leave ack back to the leaving socket.
+        # Sync local room state immediately after queuing leave.
+        await self.event_queue.put_event("ChatRoomLeave", "")
+        self._reset_chatroom_flow()
+
+    async def query_account(self, query: str, timeout: float = 10.0):
+        self.last_account_query_results.pop(query, None)
+        await self.event_queue.put_event("AccountQuery", {"Query": query})
+        elapsed = 0.0
+        interval = 0.2
+        while elapsed < timeout:
+            if query in self.last_account_query_results:
+                return self.last_account_query_results.get(query)
+            await asyncio.sleep(interval)
+            elapsed += interval
+        return self.last_account_query_results.get(query)
+
+    def get_chat_history(self, limit: int = 20):
+        safe_limit = max(1, min(limit, len(self.chat_history) or 1))
+        return list(self.chat_history)[-safe_limit:]
+
+    def get_character_data(self, member_number: Optional[int] = None):
+        if member_number is not None:
+            if self.player.get("MemberNumber") == member_number:
+                return self.player
+            return self.others.get(member_number)
+
+        characters = dict(self.others)
+        player_member_number = self.player.get("MemberNumber")
+        if isinstance(player_member_number, int):
+            characters[player_member_number] = self.player
+        return characters
 
     async def reset_appearance(self):
         logger.info("Resetting appearance")
@@ -489,27 +599,8 @@ class BCBot:
                     await asyncio.sleep(2)
                     continue
 
-                if not self.current_chatroom:
-                    if not self._chatroom_search_requested and not self._chatroom_search_done:
-                        await self.search_chatroom(self._target_room_name)
-                        await asyncio.sleep(1)
-                        continue
-
-                    if not self._chatroom_search_done:
-                        await asyncio.sleep(1)
-                        continue
-
-                    if self.chatroom_search_result:
-                        if not self._chatroom_join_requested and self._chatroom_join_response is None:
-                            await self.join_chatroom(self._target_room_name)
-                    else:
-                        if not self._chatroom_create_requested:
-                            await self.create_chatroom(self.chatroom_settings)
-
-                    await asyncio.sleep(2)
-                    continue
-
-                if not self._appearance_reset_done:
+                # Manual mode: room search/create/join is triggered by explicit API calls.
+                if not self._appearance_reset_done and self.appearance:
                     await self.reset_appearance()
 
                 await asyncio.sleep(5)
