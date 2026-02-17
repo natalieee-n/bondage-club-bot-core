@@ -10,6 +10,14 @@ import socketio
 from lzstring import LZString
 
 from .utils.logger import get_logger
+from .utils.member_actions import (
+    EXCLUDED_LOCKS,
+    build_item_update_payload,
+    get_cached_character,
+    normalize_appearance_item,
+    resolve_member_number,
+    strip_lock_properties,
+)
 from .utils.socket_event_queue import SocketEventQueue
 
 logger = get_logger(__name__)
@@ -468,6 +476,152 @@ class BCBot:
         logger.info("Sending message: %s", msg)
         data = {"Content": msg, "Type": "Chat", "Target": None}
         await self.event_queue.put_event("ChatRoomChat", data)
+
+    def resolve_member_number(self, member_number: int = -1, player_index: int = -1):
+        return resolve_member_number(
+            player=self.player,
+            others=self.others,
+            current_chatroom=self.current_chatroom,
+            member_number=member_number,
+            player_index=player_index,
+        )
+
+    def get_cached_character(self, member_number: int):
+        return get_cached_character(
+            player=self.player,
+            others=self.others,
+            member_number=member_number,
+        )
+
+    async def send_chatroom_item_update(
+        self,
+        target: int,
+        group: str,
+        name: Optional[str],
+        color: Any = "Default",
+        difficulty: int = 0,
+        prop: Optional[Dict[str, Any]] = None,
+        craft: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        payload = build_item_update_payload(
+            target=target,
+            group=group,
+            name=name,
+            color=color,
+            difficulty=difficulty,
+            prop=prop,
+            craft=craft,
+        )
+        await self.event_queue.put_event("ChatRoomCharacterItemUpdate", payload)
+
+    async def unlock_member_locks(self, member_number: int = -1, player_index: int = -1) -> Dict[str, Any]:
+        target_no, resolve_err = self.resolve_member_number(member_number=member_number, player_index=player_index)
+        if resolve_err:
+            return {"ok": False, "error": resolve_err}
+        if not isinstance(target_no, int):
+            return {"ok": False, "error": "invalid target member"}
+
+        target = self.get_cached_character(target_no)
+        if not target:
+            return {"ok": False, "error": f"member {target_no} not found in local cache"}
+
+        appearance = target.get("Appearance")
+        if not isinstance(appearance, list):
+            return {"ok": False, "error": "target has no appearance list in local cache"}
+
+        unlocked_groups: list[str] = []
+        skipped_locked_groups: list[str] = []
+
+        for raw_item in appearance:
+            item = normalize_appearance_item(raw_item)
+            if not item:
+                continue
+            prop = item["property"]
+            if not isinstance(prop, dict):
+                continue
+
+            locked_by = prop.get("LockedBy")
+            if not isinstance(locked_by, str) or not locked_by:
+                continue
+            if locked_by in EXCLUDED_LOCKS:
+                skipped_locked_groups.append(item["group"])
+                continue
+
+            new_prop = strip_lock_properties(prop)
+            await self.send_chatroom_item_update(
+                target=target_no,
+                group=item["group"],
+                name=item["name"],
+                color=item["color"],
+                difficulty=item["difficulty"],
+                prop=new_prop,
+                craft=item["craft"],
+            )
+            if isinstance(raw_item, dict):
+                if isinstance(new_prop, dict):
+                    raw_item["Property"] = deepcopy(new_prop)
+                    if "P" in raw_item:
+                        raw_item["P"] = deepcopy(new_prop)
+                else:
+                    raw_item.pop("Property", None)
+                    raw_item.pop("P", None)
+            unlocked_groups.append(item["group"])
+
+        return {
+            "ok": True,
+            "target_member_number": target_no,
+            "target_name": target.get("Name", ""),
+            "unlocked_count": len(unlocked_groups),
+            "unlocked_groups": unlocked_groups,
+            "skipped_owner_lover_lock_count": len(skipped_locked_groups),
+            "skipped_owner_lover_lock_groups": skipped_locked_groups,
+        }
+
+    async def release_member_total(self, member_number: int = -1, player_index: int = -1) -> Dict[str, Any]:
+        target_no, resolve_err = self.resolve_member_number(member_number=member_number, player_index=player_index)
+        if resolve_err:
+            return {"ok": False, "error": resolve_err}
+        if not isinstance(target_no, int):
+            return {"ok": False, "error": "invalid target member"}
+
+        target = self.get_cached_character(target_no)
+        if not target:
+            return {"ok": False, "error": f"member {target_no} not found in local cache"}
+
+        appearance = target.get("Appearance")
+        if not isinstance(appearance, list):
+            return {"ok": False, "error": "target has no appearance list in local cache"}
+
+        released_groups: list[str] = []
+        kept_items: list[Dict[str, Any]] = []
+        for raw_item in appearance:
+            item = normalize_appearance_item(raw_item)
+            if not item:
+                if isinstance(raw_item, dict):
+                    kept_items.append(raw_item)
+                continue
+            group = item["group"]
+            if not group.startswith("Item"):
+                if isinstance(raw_item, dict):
+                    kept_items.append(raw_item)
+                continue
+            await self.send_chatroom_item_update(
+                target=target_no,
+                group=group,
+                name=None,
+                color="Default",
+                difficulty=item["difficulty"],
+            )
+            released_groups.append(group)
+
+        target["Appearance"] = kept_items
+        return {
+            "ok": True,
+            "target_member_number": target_no,
+            "target_name": target.get("Name", ""),
+            "released_count": len(released_groups),
+            "released_groups": released_groups,
+        }
 
     async def customized_event_handler(self, data):
         logger.warning("No customized event handler found.")
