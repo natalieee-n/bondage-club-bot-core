@@ -34,3 +34,17 @@ Example runtime files are under `examples/basic_bot/`.
 - Config template: `examples/basic_bot/.env.example`
 - Chatroom config: `examples/basic_bot/chatroom_config.json`
 - Docker files: `examples/basic_bot/Dockerfile`, `examples/basic_bot/docker-compose.yml`
+
+## Get appearance code from browser console
+
+You can export a full appearance code directly in Bondage Club browser console:
+
+```js
+LZString.compressToBase64(JSON.stringify(ServerAppearanceBundle(Player.Appearance)))
+```
+
+Steps:
+1. Open Bondage Club in browser and log in with the target account.
+2. Press `F12` to open DevTools, then switch to the Console tab.
+3. Paste the command above and run it.
+4. Copy the output string (usually starts with `Nobw...`) and use it as `APPEARANCE_CODE`.
