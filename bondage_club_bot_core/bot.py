@@ -22,7 +22,6 @@ class BCBot:
         self,
         username: str,
         password: str,
-        appearance_code: str = None,
         server_url: str = "https://bondage-club-server.herokuapp.com/",
         origin: str = "https://www.bondage-europe.com",
     ):
@@ -34,7 +33,7 @@ class BCBot:
 
         self.player: Dict[str, Any] = {}
         self.others: Dict[int, Dict[str, Any]] = {}
-        self.appearance = self._decode_appearance(appearance_code)
+        self.appearance = None
 
         self.is_connected = False
         self.is_logged_in = False
