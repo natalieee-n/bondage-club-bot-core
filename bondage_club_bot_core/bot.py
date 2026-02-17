@@ -575,51 +575,10 @@ class BCBot:
         await self.event_queue.put_event("AccountUpdate", data)
         self._appearance_reset_done = True
 
-    async def send_chat_packet(
-        self,
-        content: str,
-        message_type: str = "Chat",
-        target: Optional[int] = None,
-        dictionary: Optional[list[dict]] = None,
-    ):
-        logger.info("Sending %s message to %s: %s", message_type, target, content)
-        data: Dict[str, Any] = {"Content": content, "Type": message_type, "Target": target}
-        if dictionary is not None:
-            data["Dictionary"] = dictionary
-        await self.event_queue.put_event("ChatRoomChat", data)
-
     async def send_to_chat(self, msg):
-        await self.send_chat_packet(content=msg, message_type="Chat", target=None)
-
-    async def send_activity_to_member(
-        self,
-        target_member_number: int,
-        activity_name: str = "Pet",
-        focus_asset_group: str = "ItemHead",
-    ):
-        if not isinstance(target_member_number, int) or target_member_number <= 0:
-            raise ValueError("target_member_number must be a positive integer")
-
-        normalized_activity = (activity_name or "").strip()
-        normalized_focus_group = (focus_asset_group or "").strip()
-        if not normalized_activity:
-            raise ValueError("activity_name cannot be empty")
-        if not normalized_focus_group:
-            raise ValueError("focus_asset_group cannot be empty")
-
-        content = f"ChatOther-{normalized_focus_group}-{normalized_activity}"
-        dictionary = [
-            {"SourceCharacter": self.player.get("MemberNumber")},
-            {"TargetCharacter": target_member_number},
-            {"Tag": "FocusAssetGroup", "FocusGroupName": normalized_focus_group},
-            {"ActivityName": normalized_activity},
-        ]
-        await self.send_chat_packet(
-            content=content,
-            message_type="Activity",
-            target=target_member_number,
-            dictionary=dictionary,
-        )
+        logger.info("Sending message: %s", msg)
+        data = {"Content": msg, "Type": "Chat", "Target": None}
+        await self.event_queue.put_event("ChatRoomChat", data)
 
     async def customized_event_handler(self, data):
         logger.warning("No customized event handler found.")
